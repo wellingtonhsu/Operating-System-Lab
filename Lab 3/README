@@ -1,0 +1,11 @@
+NYU Operating Systems CSCI-GA.2250-001, Spring 2017
+Wellington Hsu (whh278)
+
+Compile by:
+make
+
+Run by:	
+./MemoryManagement [-a<algo>] [-o<options>] [–f<num_frames>] inputfile randomfile
+
+
+Output to <stdout> (on screen)

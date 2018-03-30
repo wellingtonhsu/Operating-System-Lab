@@ -1,0 +1,10 @@
+NYU Operating Systems CSCI-GA.2250-001, Spring 2017
+Wellington Hsu (whh278)
+
+Compile by:
+make linker
+
+Run by:	
+./linker <input>
+
+Output to <stdout> (on screen)

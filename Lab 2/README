@@ -1,0 +1,11 @@
+NYU Operating Systems CSCI-GA.2250-001, Spring 2017
+Wellington Hsu (whh278)
+
+Compile by:
+make scheduler
+
+Run by:	
+./schduler [-v] -s{FLS | R<num>} inputFile randomFile
+
+
+Output to <stdout> (on screen)

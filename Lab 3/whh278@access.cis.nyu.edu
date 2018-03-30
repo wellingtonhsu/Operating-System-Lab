@@ -1,0 +1,649 @@
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <vector>
+#include <cctype>
+#include <map>
+#include <stack>
+#include <algorithm>
+#include <stdlib.h>
+#include <stdio.h>
+#include <cstdlib>
+#include <iomanip>
+#include <iterator>
+#include <string>
+#include <cstring>
+#include <ctype.h>
+using namespace std;
+
+
+struct Instructions {
+   int op;
+   int page;
+};
+
+struct PTE {
+  public:
+  	unsigned present:1;
+  	unsigned modified:1;
+  	unsigned referenced:1;
+  	unsigned pagedout:1;
+  	unsigned indexPhysical:28;
+};
+
+void initialisePageBits();
+void initialiseframeTable(char* framesize);
+void readRandomNumbers(char* rfile);
+int  myRandom(int burst);
+void setMap(int page, int num);
+void setModified(int page);
+void setReferenced(int page);
+void setPagedOut(int page);
+void resetPresent(int page);
+void resetReferenced(int page);
+void resetModified(int page);
+bool checkModified(int page);
+bool checkReferenced(int page);
+bool checkPresent(int page);
+bool checkPagedOut(int page);
+int  convFrame(int page);
+void PrintPageTable();
+void PrintFrameTable();
+void PrintSummary();
+
+
+
+int numFrames;
+int num;
+int ofs = 0;
+
+int instructionNo=0;
+int mapped=0;
+int unmapped=0;
+int in=0;
+int out=0;
+int zero=0;
+unsigned long long cost=0;
+
+
+class PageReplacement{
+  public:
+    int hand;
+    virtual int getFrame(vector<int>& frameTable, vector<PTE>& pageBits, vector<int>& revframeTable) = 0;
+};
+
+
+class FIFO: public PageReplacement{
+  public:
+    int getFrame(vector<int>& frameTable, vector<PTE>& pageBits, vector<int>& revframeTable);
+};
+
+int FIFO::getFrame(vector<int>& frameTable, vector<PTE>& pageBits, vector<int>& revframeTable){
+  int frameNumber;
+  frameNumber = frameTable.front();
+	frameTable.erase(frameTable.begin());
+  frameTable.push_back(frameNumber);
+	return frameNumber;
+};
+
+
+class SecondChance: public PageReplacement{
+  public:
+    int getFrame(vector<int>& frameTable, vector<PTE>& pageBits, vector<int>& revframeTable);
+};
+
+int SecondChance::getFrame(vector<int>& frameTable, vector<PTE>& pageBits, vector<int>& revframeTable){
+  int frameNumber;
+  int page;
+
+  while (1){
+    frameNumber = frameTable.front();
+    page = revframeTable[frameNumber];
+    if (checkReferenced(page)){
+      resetReferenced(page);
+      frameTable.erase(frameTable.begin());
+      frameTable.push_back(frameNumber);
+    }
+    else{
+      frameTable.erase(frameTable.begin());
+      frameTable.push_back(frameNumber);
+      break;
+    }
+  }
+  return frameNumber;
+};
+
+
+class physicalClock: public PageReplacement{
+  public:
+    int hand;
+    int getFrame(vector<int>& frameTable, vector<PTE>& pageBits, vector<int>& revframeTable);
+};
+
+int physicalClock::getFrame(vector<int>& frameTable, vector<PTE>& pageBits, vector<int>& revframeTable){
+  int frameNumber;
+  int page;
+
+  while(1){
+    frameNumber = frameTable[hand];
+    page = revframeTable[frameNumber];
+    hand = (hand+1) % frameTable.size();
+
+    if(checkReferenced(page)){
+      resetReferenced(page);
+    }
+    else{
+      break;
+    }
+  }
+  return frameNumber;
+};
+
+
+class virtualClock: public PageReplacement{
+  public:
+    int hand;
+    int getFrame(vector<int>& frameTable, vector<PTE>& pageBits, vector<int>& revframeTable);
+};
+
+int virtualClock::getFrame(vector<int>& frameTable, vector<PTE>& pageBits, vector<int>& revframeTable){
+  int tmp;
+  int ret;
+  while(1){
+    if (checkPresent(hand)){
+      if(checkReferenced(hand)){
+        resetReferenced(hand);
+      }
+      else{
+        ret = convFrame(hand);
+        break;
+      }
+    }
+    hand = (hand+1) % pageBits.size();
+  }
+  return ret;
+};
+
+
+class getRandom: public PageReplacement{
+  public:
+    int getFrame(vector<int>& frameTable, vector<PTE>& pageBits, vector<int>& revframeTable);
+};
+
+int getRandom::getFrame(vector<int>& frameTable, vector<PTE>& pageBits, vector<int>& revframeTable){
+  int tmp = myRandom(frameTable.size());
+  return frameTable[tmp];
+};
+
+
+class NRU: public PageReplacement{
+  private:
+    int count;
+  public:
+    int getFrame(vector<int>& frameTable, vector<PTE>& pageBits, vector<int>& revframeTable);
+};
+
+int NRU::getFrame(vector<int>& frameTable, vector<PTE>& pageBits, vector<int>& revframeTable){
+  vector<int> class0;
+  vector<int> class1;
+  vector<int> class2;
+  vector<int> class3;
+  int returnPage = -1;
+  int flag = 1;
+
+  for(int i=0; i<pageBits.size(); i++){
+    if(checkPresent(i)){
+      //unsigned?
+      int ref = checkReferenced(i);
+      int mod = checkModified(i);
+
+      if(ref==0 && mod==0){
+        class0.push_back(convFrame(i));
+      }
+      else if(ref == 0 && mod == 1){
+        class1.push_back(convFrame(i));
+      }
+      else if(ref == 1 && mod == 0){
+        class2.push_back(convFrame(i));
+      }
+      else if(ref == 1 && mod == 1){
+        class3.push_back(convFrame(i));
+      }
+    }
+  }
+
+  if (class0.size() > 0) {
+    int tmp = myRandom(class0.size());
+    returnPage = class0[tmp];
+    flag=0;
+  }
+  if(flag){
+    if (class1.size() > 0){
+        int tmp = myRandom(class1.size());
+        returnPage = class1[tmp];
+        flag=0;
+    }
+  }
+  if(flag){
+    if (class2.size() > 0){
+        int tmp = myRandom(class2.size());
+        returnPage = class2[tmp];
+        flag=0;
+    }
+  }
+  if(flag){
+    if (class3.size() > 0){
+        int tmp = myRandom(class3.size());
+        returnPage = class3[tmp];
+        flag=0;
+    }
+  }
+
+  count++;
+  if (count == 10){
+    count = 0;
+    for (int i=0; i<pageBits.size(); i++){
+      if(checkPresent(i)){
+        resetReferenced(i);
+      }
+    }
+  }
+  return returnPage;
+};
+
+
+class physicalAging: public PageReplacement{
+  private:
+    vector<unsigned int> ageVector;
+  public:
+    int getFrame(vector<int>& frameTable, vector<PTE>& pageBits, vector<int>& revframeTable);
+};
+
+int physicalAging::getFrame(vector<int>& frameTable, vector<PTE>& pageBits, vector<int>& revframeTable){
+  unsigned int minAging = -1;
+  unsigned int minFrame = -1;
+  unsigned int minIndex = -1;
+  unsigned int tmp;
+
+  if (ageVector.size() == 0){
+	   ageVector = vector<unsigned int>(numFrames, 0);
+  }
+
+  for (int i=0; i<frameTable.size(); i++) {
+    tmp = checkReferenced(revframeTable[frameTable[i]]);
+    ageVector[i] = ageVector[i] >> 1;
+    ageVector[i] |= tmp << 31;
+    if(ageVector[i] < minAging){
+			minAging = ageVector[i];
+			minFrame = frameTable[i];
+			minIndex = i;
+		}
+    resetReferenced(revframeTable[frameTable[i]]);
+	}
+  ageVector[minIndex] = 0;    //reset
+  return minFrame;
+};
+
+
+
+class virtualAging: public PageReplacement{
+  private:
+    vector<unsigned int> ageVector;
+  public:
+    int getFrame(vector<int>& frameTable, vector<PTE>& pageBits, vector<int>& revframeTable);
+};
+
+int virtualAging::getFrame(vector<int>& frameTable, vector<PTE>& pageBits, vector<int>& revframeTable){
+  unsigned int minAging = -1;
+  unsigned int minIndex = -1;
+  unsigned int tmp;
+
+  if (ageVector.size() == 0){
+    ageVector = vector<unsigned int>(64, 0);
+  }
+  for (int i=0; i<pageBits.size(); i++) {
+    tmp = checkReferenced(i);
+    ageVector[i]= ageVector[i] >> 1;
+    ageVector[i] |= tmp << 31;
+
+    if (checkPresent(i) && ageVector[i] < minAging) {
+      minAging = ageVector[i];
+      minIndex = i;
+    }
+    if (checkPresent(i)) {
+      resetReferenced(i);
+    }
+  }
+  ageVector[minIndex] = 0;    //reset
+  return convFrame(minIndex);
+
+};
+
+
+vector<Instructions> instrList;
+vector<int> frameTable;
+vector<int> randomValues;
+vector<int> revframeTable;
+vector<PTE> pageBits;
+PageReplacement *algo;
+bool OCommand, PCommand, FCommand, SCommand;
+
+
+int main(int arg, char* argv[]){
+
+
+  if (arg < 6)
+	{
+		exit (EXIT_FAILURE);
+	}
+
+
+  if(argv[1][2] == 'f') {
+    algo = new FIFO();
+	}
+	else if (argv[1][2] == 'r'){
+		algo = new getRandom();
+	}
+	else if (argv[1][2] == 's'){
+		algo = new SecondChance();
+	}
+	else if (argv[1][2] == 'c'){
+		algo = new physicalClock();
+	}
+	else if (argv[1][2] == 'a'){
+		algo = new physicalAging();
+	}
+  else if (argv[1][2] == 'N'){
+		algo = new NRU();
+	}
+  else if (argv[1][2] == 'X'){
+		algo = new virtualClock();
+	}
+  else if (argv[1][2] == 'Y'){
+		algo = new virtualAging();
+	}
+
+  //Initialise Input Command
+  for(int i=2; i<strlen(argv[2]); i++){
+    if(argv[2][i] == 'O'){
+      OCommand = true;
+    }
+    if(argv[2][i] == 'P'){
+      PCommand = true;
+    }
+    if(argv[2][i] == 'F'){
+      FCommand = true;
+    }
+    if(argv[2][i] == 'S'){
+      SCommand = true;
+    }
+  };
+
+
+  //Read Input file
+  ifstream myReadFile;
+  myReadFile.open(argv[4]);
+  int op,page;
+  string line;
+
+  while(getline(myReadFile, line)){
+    if (line[0] == '#'){
+      continue;
+    }
+    istringstream token(line);
+    token >> op >> page;
+    Instructions tmp;
+    tmp.op = op;
+    tmp.page = page;
+    instrList.push_back(tmp);
+  }
+  myReadFile.close();
+
+  //Read random number file
+  readRandomNumbers(argv[5]);
+
+  //Initialise Page Bits
+  initialisePageBits();
+
+  //Initialise frameTable
+  initialiseframeTable(argv[3]);
+
+  //Simulation
+  for (int i = 0; i < instrList.size(); i++) {
+      //Print the current instruction
+      if(OCommand){
+        cout << "==> inst: " << instrList[i].op << " " << instrList[i].page << endl;
+      }
+      if (instrList[i].op == 1){
+        setModified(instrList[i].page);
+      }
+
+			 // If frame table has available frame, use a free one.
+       if (!checkPresent(instrList[i].page)){
+         if (frameTable.size() < numFrames){
+           //Insert frameTable at position num
+           num = frameTable.size();
+           setMap(instrList[i].page, num);
+           revframeTable[num] = instrList[i].page;
+           if(OCommand){
+             printf("%d: ZERO %8d\n",instructionNo, num);
+             printf("%d: MAP  %4d%4d\n", instructionNo, instrList[i].page, num);
+           }
+           zero++;
+           mapped++;
+           frameTable.push_back(num);
+         }
+
+         else{
+           //Evicted and insert frameTable at position num
+           num = algo->getFrame(frameTable, pageBits, revframeTable);
+           setMap(instrList[i].page, num);
+           resetPresent(revframeTable[num]);
+           if(OCommand){
+             printf("%d: UNMAP%4d%4d\n",instructionNo, revframeTable[num], num);
+           }
+           resetReferenced(revframeTable[num]);
+           unmapped++;
+
+           //Check modified bit of the previous page
+           if(checkModified(revframeTable[num])){
+
+             if(OCommand){
+               printf("%d: OUT  %4d%4d\n",instructionNo, revframeTable[num], num);
+             }
+             resetModified(revframeTable[num]);
+             setPagedOut(revframeTable[num]);
+            out++;
+           }
+           if(checkPagedOut(instrList[i].page)){
+             if(OCommand){
+               printf("%d: IN   %4d%4d\n",instructionNo, instrList[i].page, num);
+             }
+             in++;
+           }
+           else{
+             if(OCommand){
+               printf("%d: ZERO %8d\n",instructionNo, num);
+             }
+             zero++;
+           }
+           if(OCommand){
+             printf("%d: MAP  %4d%4d\n", instructionNo, instrList[i].page, num);
+           }
+           revframeTable[num] = instrList[i].page;
+           mapped++;
+         }
+       }
+       else{
+         if (instrList[i].op == 1){
+           setModified(instrList[i].page);
+         }
+         setReferenced(instrList[i].page);
+       }
+       instructionNo++;
+	}
+
+  //Print Results
+  if (PCommand){
+    PrintPageTable();
+  }
+  if (FCommand){
+    PrintFrameTable();
+  }
+  if (SCommand){
+    PrintSummary();
+  }
+
+}
+
+void initiliseAlgo(){
+
+}
+
+
+void readRandomNumbers(char* rfile){
+	//Read random number file
+	ifstream randomNumFile;
+	randomNumFile.open(rfile);
+  int totalNum=0;
+  int tmp;
+  randomNumFile >> totalNum;
+  while (randomNumFile >> tmp){
+		randomValues.push_back(tmp);
+	}
+	randomNumFile.close();
+};
+
+
+int myRandom(int burst)
+{
+	if(ofs == randomValues.size())
+			ofs = 0;
+	int returnValue = randomValues[ofs] % burst;
+	ofs++;
+	return returnValue;
+};
+
+
+int convFrame(int page){
+  int tmp = 0;
+  for(int i=0; i<revframeTable.size();i++){
+    if (revframeTable[i] == page){
+      tmp = i;
+      break;
+    }
+  }
+  return tmp;
+};
+
+void initialisePageBits(){
+  PTE tmp;
+  tmp.present  = 0;
+	tmp.pagedout = 0;
+	tmp.modified = 0;
+	for (int i=0; i<64; i++) {
+		pageBits.push_back(tmp);
+	}
+};
+
+void initialiseframeTable(char* input){
+  string framesize = input;
+  framesize.erase (0,2);
+  numFrames = stoi(framesize);
+  revframeTable = vector<int>(numFrames, 0);
+}
+
+void setMap(int page, int num){
+  pageBits[page].present = 1;
+  pageBits[page].referenced = 1;
+  pageBits[page].indexPhysical = num;
+}
+
+void setModified(int page){
+  pageBits[page].modified = 1;
+}
+
+void setReferenced(int page){
+  pageBits[page].referenced = 1;
+}
+
+void setPagedOut(int page){
+  pageBits[page].pagedout = 1;
+}
+
+void resetPresent(int page){
+  pageBits[page].present = 0;
+}
+
+void resetModified(int page){
+  pageBits[page].modified = 0;
+}
+
+void resetReferenced(int page){
+  pageBits[page].referenced = 0;
+}
+
+bool checkPresent(int page){
+  return pageBits[page].present == 1;
+}
+
+bool checkModified(int page){
+  return pageBits[page].modified == 1;
+}
+
+bool checkReferenced(int page){
+  return pageBits[page].referenced == 1;
+}
+
+bool checkPagedOut(int page){
+	return pageBits[page].pagedout == 1;
+}
+
+void PrintPageTable(){
+  for(int i=0; i<pageBits.size(); i++){
+    if (checkPresent(i)) {
+      cout << i <<":";
+      if(checkReferenced(i)){
+        cout << "R";
+      }
+      else{
+        cout<<"-";
+      }
+      if(checkModified(i)){
+        cout << "M";
+      }
+      else{
+        cout<<"-";
+      }
+      if(checkPagedOut(i)){
+        cout << "S";
+      }
+      else{
+        cout<<"-";
+      }
+      cout<<" ";
+    }
+    else{
+      if(checkPagedOut(i)){
+        cout <<"# ";
+      }
+      else{
+        cout <<"* ";
+      }
+    }
+  }
+  cout<<endl;
+}
+
+void PrintFrameTable(){
+  for(int i=0;i<revframeTable.size();i++){
+    cout<<revframeTable[i]<<" ";
+  }
+  cout<<endl;
+}
+
+void PrintSummary(){
+  cost = (long long)instructionNo + (long long)400*(mapped+unmapped) + (long long)3000*(in+out) + (long long)150*zero;
+  printf("SUM %d U=%d M=%d I=%d O=%d Z=%d ===> %llu\n",
+          instructionNo, unmapped, mapped, in, out, zero, cost);
+}
